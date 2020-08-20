@@ -1,0 +1,152 @@
+<?php
+
+/**
+ * @file
+ * Installs the tables required by Commerce Bleumi Pay.
+ */
+
+/**
+ * Implements hook_schema().
+ */
+function commerce_bleumipay_schema()
+{
+  $schema = array();
+
+  $schema['commerce_bleumipay_cron'] = array(
+    'description' => 'Stores CRONs info.',
+    'fields' => array(
+      'id' => array(
+        'description' => 'Serial numeric ID of the CRON control in the local database.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 1,
+      ),
+      'payment_updated_at' => array(
+        'description' => 'The Unix timestamp when the Payments were last updated.',
+        'type' => 'int',
+        'not null' => FALSE,
+      ),
+      'order_updated_at' => array(
+        'description' => 'The Unix timestamp when the Orders were last updated.',
+        'type' => 'int',
+        'not null' => FALSE,
+      ),
+    ),
+    'primary key' => array('id'),
+  );
+
+  $schema['commerce_bleumipay_order'] = array(
+    'description' => 'Stores Bleumi Pay custom order data columns.',
+    'fields' => array(
+      'order_id' => array(
+        'description' => 'Order ID',
+        'type' => 'int',
+        'not null' => TRUE
+      ),
+      'bleumipay_addresses' => array(
+        'description' => 'Payment Addresses (Bleumi Pay)',
+        'type' => 'text',
+        'not null' => FALSE
+      ),
+      'bleumipay_payment_status' => array(
+        'description' => 'Payment Status (Bleumi Pay)',
+        'type' => 'varchar',
+        'length' => 30,
+        'not null' => FALSE
+      ),
+      'bleumipay_txid' => array(
+        'description' => 'Transaction ID (Bleumi Pay)',
+        'type' => 'varchar',
+        'length' => 30,
+        'not null' => FALSE
+      ),      
+      'bleumipay_data_source' => array(
+        'description' => 'Data Source (Bleumi Pay)',
+        'type' => 'varchar',
+        'length' => 30,
+        'not null' => FALSE
+      ), 
+      'bleumipay_transient_error' => array(
+        'description' => 'Transient Error (Bleumi Pay)',
+        'type' => 'varchar',
+        'length' => 30,
+        'not null' => FALSE
+      ), 
+      'bleumipay_transient_error_code' => array(
+        'description' => 'Transient Error Code (Bleumi Pay)',
+        'type' => 'varchar',
+        'length' => 30,
+        'not null' => FALSE
+      ), 
+      'bleumipay_transient_error_msg' => array(
+        'description' => 'Transient Error Message (Bleumi Pay)',
+        'type' => 'varchar',
+        'length' => 500,
+        'not null' => FALSE
+      ), 
+      'bleumipay_retry_action' => array(
+        'description' => 'Retry Action (Bleumi Pay)',
+        'type' => 'varchar',
+        'length' => 100,
+        'not null' => FALSE
+      ), 
+      'bleumipay_hard_error' => array(
+        'description' => 'Hard Error (Bleumi Pay)',
+        'type' => 'varchar',
+        'length' => 30,
+        'not null' => FALSE
+      ), 
+      'bleumipay_hard_error_code' => array(
+        'description' => 'Hard Error Code (Bleumi Pay)',
+        'type' => 'varchar',
+        'length' => 30,
+        'not null' => FALSE
+      ), 
+      'bleumipay_hard_error_msg' => array(
+        'description' => 'Hard Error Message (Bleumi Pay)',
+        'type' => 'varchar',
+        'length' => 500,
+        'not null' => FALSE
+      ), 
+      'bleumipay_processing_completed' => array(
+        'description' => 'Processing Completed (Bleumi Pay)',
+        'type' => 'varchar',
+        'length' => 30,
+        'not null' => FALSE
+      ), 
+      'bleumipay_transient_error_count' => array(
+        'description' => 'Transient Error Count (Bleumi Pay)',
+        'type' => 'varchar',
+        'length' => 30,
+        'not null' => FALSE
+      )   
+    ),
+    'primary key' => array('order_id'),
+  );
+  return $schema;
+}
+
+/**
+ * Creates the default data for Bleumi Pay Cron table
+ *
+ * @return void
+ */
+function create_default_cron_time()
+{
+  $time = strtotime(date("Y-m-d H:i:s", strtotime("-1 day")));
+  $query = db_insert('commerce_bleumipay_cron')
+  ->fields(array(
+    'id' => 1,
+    'payment_updated_at' => $time,
+    'order_updated_at' => $time,
+  ))
+  ->execute();
+}
+
+/**
+ * Implements hook_install
+ */
+function commerce_bleumipay_install() 
+{
+  create_default_cron_time();
+}

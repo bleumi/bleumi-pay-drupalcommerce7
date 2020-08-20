@@ -1,0 +1,44 @@
+{
+    "name": "bleumi/bleumi-pay-drupal-commerce",
+    "type": "drupal-module",
+    "description": "Enable your Drupal Commerce store to accept digital currency payments with Bleumi Pay.",
+    "version": "1.0.0",
+    "keywords": [
+        "bleumipay",
+        "cryptocurrency payments",
+        "digital currency payments",
+        "digital dollar payments",
+        "micropayments",
+        "payments",
+        "stablecoin payments",
+        "algorand",
+        "algorand standard assets",
+        "asa",
+        "bitcoin",
+        "ethereum",
+        "ethereum erc20",
+        "ethereum erc-20",
+        "erc20",
+        "erc-20",
+        "rsk",
+        "rsk erc20",
+        "rsk erc-20",
+        "xdai"
+      ],
+    "homepage": "https://pay.bleumi.com",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Bleumi Pay",
+            "email": "support@bleumi.com",
+            "homepage": "https://pay.bleumi.com",
+            "role": "Developer"
+        }
+    ],
+    "require": {
+        "bleumi/bleumi-pay-sdk-php": "^1.0.23"
+    },
+    "config": {	
+        "vendor-dir": "commerce_bleumipay/includes/BleumiPay/vendor/"	
+    }
+}

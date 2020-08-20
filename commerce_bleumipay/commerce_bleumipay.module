@@ -1,0 +1,390 @@
+<?php
+
+/**
+ * @file
+ * Provides a payment method for Drupal Commerce Bleumi Pay
+ *
+ */
+ require_once __DIR__ . '/includes/BleumiPay/APIHandler.php';
+ require_once __DIR__ . '/includes/BleumiPay/DBHandler.php';
+ require_once __DIR__ . '/includes/BleumiPay/ExceptionHandler.php';
+ require_once __DIR__ . '/includes/BleumiPay/OrderCron.php';
+ require_once __DIR__ . '/includes/BleumiPay/PaymentCron.php';
+ require_once __DIR__ . '/includes/BleumiPay/RetryCron.php';
+/**
+ * Implements hook_commerce_payment_method_info().
+ */
+function commerce_bleumipay_commerce_payment_method_info() {
+  $payment_methods = array();
+
+  $img = theme('image', array(
+    'path' => drupal_get_path('module', 'commerce_bleumipay') . '/assets/images/BleumiPayLogo.png',
+  ));
+
+  $payment_methods['commerce_bleumipay'] = array(
+    'base' => 'commerce_bleumipay',
+    'title' => t('Bleumi Pay'),
+    'short_title' => t('Bleumi Pay'),
+    'display_title' => $img .'   '. t("-  Pay with Digital Currencies"),
+    'description' => t('Accept digital currency payments (like Tether USD, USD Coin, Stasis EURO, CryptoFranc).'),
+    'terminal' => FALSE,
+    'offsite' => TRUE,
+    'offsite_autoredirect' => TRUE,
+  );
+
+  return $payment_methods;
+}
+
+/**
+ * Returns the default settings for the Bleumi Pay payment method.
+ *
+ * @return array
+ *   Returns the default settings to populate the configuration form.
+ */
+function commerce_bleumipay_default_settings() {
+  return array(
+    // An API key is required eventually for proper function.
+    'api_key' => '',
+    'text' => t('Pay With Digital Currencies'),
+  );
+}
+
+/**
+ * Global, required API configuration form.
+ *
+ * @return array
+ *   Returns form elements for the payment method’s settings form included as
+ *   part of the payment method’s enabling action in Rules.
+ */
+function commerce_bleumipay_settings_form($settings = array()) {
+  $form = array();
+
+  // Merge default settings into the stored settings array.
+  $settings = (array) $settings + commerce_bleumipay_default_settings();
+
+  $form['links'] = array(
+    '#type' => 'markup',
+    '#markup' => '<p>' .
+    t('Accept digital currency payments (like Tether USD, USD Coin, Stasis EURO, CryptoFranc).<br/><br/>To use this extension, you need to sign up for a Bleumi Pay account and create an API Key from <a href=@bleumipay>Bleumi Pay Dashboard</a>.', array(
+      '@bleumipay' => 'https://pay.bleumi.com/app/',
+      ))
+    . '</p>',
+  );
+
+  $form['api_key'] = array(
+    '#type' => 'textfield',
+    '#default_value' => $settings['api_key'],
+    '#title' => t('Bleumi Pay API key'),
+    '#size' => 64,
+    '#maxlength' => 70,
+    '#description' => t('Bleumi Pay API access key from <a href=@bleumipay>Bleumi Pay Dashboard</a>, something like gCix0pemxoUt76Ufef16jwvbV6cC7H60HdryEJj0', array(
+      '@bleumipay' => 'https://pay.bleumi.com/app/',
+      )),
+    '#required' => TRUE,
+  );
+
+  $form['text'] = array(
+    '#type' => 'textfield',
+    '#default_value' => $settings['text'],
+    '#title' => t('Button text'),
+    '#description' => t('Change the payment button text for all transactions.'),
+    '#required' => FALSE,
+  );
+  return $form;
+}
+
+/**
+ * Payment method callback: submit form submission.
+ *
+ * Processes payment as necessary using data inputted via the payment details
+ * form elements on the form, resulting in the creation of a payment
+ * transaction.
+ *
+ * @param array $payment_method
+ *   An array containing payment_method_info hook values and user settings.
+ */
+function commerce_bleumipay_submit_form_submit($payment_method, $pane_form, $pane_values, $order, $charge) {
+  // Get order to wrapper.
+  $wrapper = entity_metadata_wrapper('commerce_order', $order);
+
+  // Get order price.
+  $amount = $wrapper->commerce_order_total->amount->value();
+
+  if (empty($amount)) {
+    watchdog('commerce_bleumipay', 'Skipping payment on order @id for zero balance.', array('@id' => $order->order_id), WATCHDOG_INFO, l(t('view order'), 'admin/commerce/orders/' . $order->order_id));
+    commerce_checkout_complete($order);
+    drupal_goto(url('checkout/' . $order->order_id . '/complete'));
+  }
+
+  $order->data['commerce_payment_commerce_bleumipay'] = $pane_values;
+
+  commerce_bleumipay_transaction($payment_method, $order, $charge);
+}
+
+/**
+ * Payment method callback: redirect form.
+ *
+ * For the hosted checkout page, this form automatically redirects to the
+ * Bleumi Pay hosted invoice page through an HTTP GET request. For the iframe,
+ * this returns form values for displaying markup elements necessary to embed
+ * the iframe and a submit button.
+ *
+ * @param array $form
+ *   Probably an empty array when this gets executed.
+ * @param array $form_state
+ *   Form submission data including order node information and payment method
+ *   information.
+ * @param object $order
+ *   An object of general order information.
+ * @param array $payment_method
+ *   An array containing payment_method_info hook values and user settings.
+ */
+function commerce_bleumipay_redirect_form($form, &$form_state, $order, $payment_method) {
+  // Get order to wrapper.
+  $wrapper = entity_metadata_wrapper('commerce_order', $order);
+
+  // Get order price.
+  $amount = $wrapper->commerce_order_total->amount->value();
+  $order_total = $wrapper->commerce_order_total->value();
+  $decimal_amount = commerce_currency_amount_to_decimal($amount, $order_total['currency_code']);
+
+  $success_url = url('checkout/' . $order->order_id . '/commerce_bleumipay/successful_payment', array('absolute' => TRUE));
+  $cancel_url = url('checkout/' . $order->order_id . '/commerce_bleumipay/cancel_payment', array('absolute' => TRUE));
+
+  $data = array(
+      "id" => $order->order_id,
+      "total" => $decimal_amount,
+      "currency" => $order_total['currency_code'],
+      "success" => $success_url,
+      "cancel" => $cancel_url 
+  );
+  $api = new \Drupal\commerce_bleumipay\BleumiPay\APIHandler();
+  $result = $api->create($data);
+  $redirect_data = array();
+
+  if (!empty($result) && !empty($result['url'])) {
+    // Update the order status to the payment redirect page.
+    commerce_order_status_update($order, 'checkout_payment', FALSE, NULL, t('Customer clicked the button to pay with Digital Currencies on the cart page.'));
+    commerce_order_save($order);
+    drupal_goto($result['url']);
+  } else {
+    drupal_set_message(t('Apologies. Checkout with Bleumi Pay does not appear to be working at the moment. Please try again.'), 'error');
+    $order = commerce_order_status_update($order, 'checkout_review');
+    drupal_goto(commerce_checkout_order_uri($order));
+  }
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+function commerce_bleumipay_form_commerce_checkout_form_alter(&$form, &$form_state) {
+  // If this checkout form contains the payment method radios...
+  if (!empty($form['commerce_payment']['payment_method']['#options'])) {
+    // Loop over its options array looking for a CoinGate option.
+    foreach ($form['commerce_payment']['payment_method']['#options'] as $key => &$value) {
+      list($method_id, $rule_name) = explode('|', $key);
+
+      // If we find Bleumi Pay...
+      if ($method_id == 'commerce_bleumipay') {
+        $payment_method = commerce_payment_method_instance_load($key);
+        $img = theme('image', array(
+          'path' => drupal_get_path('module', 'commerce_bleumipay') . '/assets/images/BleumiPayLogo.png',
+        ));
+        // Prepare the replacement radio button text with icons.
+        $value = $img .'   '. t($payment_method['settings']['text']);
+        break;
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_menu().
+ */
+function commerce_bleumipay_menu() {
+  // Define an always accessible path to receive CRON job execution request.
+  $items['commerce_bleumipay/cron'] = array(
+    'page callback' => 'commerce_bleumipay_process_cron',
+    'page arguments' => array(),
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+  );
+  // This is where user goes after clicking "Go Back" on payment redirect form.
+  $items['checkout/%commerce_order/commerce_bleumipay/cancel_payment'] = array(
+    'title' => 'Cancel checkout payment',
+    'page callback' => 'commerce_bleumipay_cancel_payment',
+    'page arguments' => array(1),
+    'access callback' => 'commerce_checkout_access',
+    'access arguments' => array(1),
+    'type' => MENU_CALLBACK,
+  );
+
+  // This is where user goes after Successful payment on payment redirect form.
+  $items['checkout/%commerce_order/commerce_bleumipay/successful_payment'] = array(
+    'title' => 'Success checkout payment',
+    'page callback' => 'commerce_bleumipay_successful_payment',
+    'page arguments' => array(1),
+    'access callback' => 'commerce_checkout_access',
+    'access arguments' => array(1),
+    'type' => MENU_CALLBACK,
+  );
+  return $items;
+}
+
+/**
+ * Page callback for "Go Back" button on payment page.
+ *
+ * @param object $order
+ *   Commerce order object.
+ */
+function commerce_bleumipay_cancel_payment($order) {
+  $order = commerce_order_status_update($order, 'checkout_review');
+  drupal_goto(commerce_checkout_order_uri($order));
+}
+
+/**
+ * Page callback for Successful payment.
+ *
+ * @param object $order
+ *   Commerce order object.
+ */
+function commerce_bleumipay_successful_payment($order) {
+  //Preparing to invoke validate
+  $callback = $_GET;
+  $params = array(
+      "hmac_alg" => $callback["hmac_alg"],
+      "hmac_input" => $callback["hmac_input"],
+      "hmac_keyId" => $callback["hmac_keyId"],
+      "hmac_value" => $callback["hmac_value"],
+  );
+  $api = new \Drupal\commerce_bleumipay\BleumiPay\APIHandler();
+  $dbHandler = new \Drupal\commerce_bleumipay\BleumiPay\DBHandler();
+  $dbHandler->applyOrderTransition($order,'place'); 
+  $order_id = $callback['id'];
+  if (!empty($order_id)) {
+      //Validating Payment
+      $isValid = $api->validatePayment($params);
+      watchdog('commerce_bleumipay', 'isValid', array('isValid'=> $isValid), WATCHDOG_INFO);
+      //Create an empty row for the order in Bleumi Pay custom data table
+      $dbHandler->createOrderMetaData($order_id); 
+      if ($isValid) {
+          //Validate success: transition order status to 'Processing'
+          $dbHandler->applyOrderTransition($order,'confirm');
+      }
+  }
+  $success_url = url('checkout/' . $order->order_id . '/payment/return/' . $order->data['payment_redirect_key'], array('absolute' => TRUE));
+  drupal_goto($success_url);
+}
+
+/**
+ * Creates a payment transaction for the specified charge amount.
+ *
+ * @param array $payment_method
+ *   The payment method instance object used to charge this payment.
+ * @param object $order
+ *   The order object the payment applies to.
+ * @param array $charge
+ *   An array indicating the amount and currency code to charge.
+ */
+function commerce_bleumipay_transaction($payment_method, $order, $charge) {
+  $transaction = commerce_payment_transaction_new('commerce_bleumipay', $order->order_id);
+  $transaction->instance_id = $payment_method['instance_id'];
+  $transaction->remote_id = '';
+  $transaction->amount = $charge['amount'];
+  $transaction->currency_code = $charge['currency_code'];
+  $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
+  $transaction->message = 'Initialized transaction';
+  $transaction->message_variables = array();
+  $transaction->data['secret'] = sha1(mt_rand() . uniqid());
+
+  commerce_payment_transaction_save($transaction);
+}
+
+/**
+ * Processes an incoming CRON request.
+ *
+ * @return void
+ */
+function commerce_bleumipay_process_cron() {
+  $job = null;
+  $jobId = $_GET["id"];
+  switch ($jobId) {
+    case 'payment':
+      $job = new \Drupal\commerce_bleumipay\BleumiPay\PaymentCron();
+      break;
+    case 'order':
+      $job = new \Drupal\commerce_bleumipay\BleumiPay\OrderCron();
+      break;
+    case 'retry':
+      $job = new \Drupal\commerce_bleumipay\BleumiPay\RetryCron();
+      break;
+    default:
+      watchdog('commerce_bleumipay', 'Invalid CRON job id specified', array(), WATCHDOG_WARNING);
+      return FALSE;
+  }
+  $job->execute();
+}
+
+/**
+ * Implements hook_commerce_order_state_info().
+ */
+function commerce_bleumipay_commerce_order_state_info() {
+  $order_states = array();
+  $order_states['awaitingconfirm'] = array(
+    'name' => 'awaitingconfirm',
+    'title' => t('Awaiting Payment Confirmation'),
+    'description' => t('Orders in this state have been awaiting-payment-confirmation as far as the customer is concerned.'),
+    'weight' => 10,
+    'default_status' => 'awaitingconfirm',
+  );
+  $order_states['multitoken'] = array(
+    'name' => 'multitoken',
+    'title' => t('Multi Token Payment'),
+    'description' => t('Orders in this state have been multi-token-payment as far as the customer is concerned.'),
+    'weight' => 10,
+    'default_status' => 'multitoken',
+  );
+  $order_states['paymentfailed'] = array(
+    'name' => 'paymentfailed',
+    'title' => t('Payment Failed'),
+    'description' => t('Orders in this state have been payment-failed as far as the customer is concerned.'),
+    'weight' => 10,
+    'default_status' => 'paymentfailed',
+  );
+  return $order_states;
+}
+
+/**
+ * Implements hook_commerce_order_status_info().
+ */
+function commerce_bleumipay_commerce_order_status_info() {
+  $order_statuses = array();
+  $order_statuses['awaitingconfirm'] = array(
+    'name' => 'awaitingconfirm',
+    'title' => t('Awaiting Payment Confirmation'),
+    'state' => 'awaitingconfirm',
+  );
+  $order_statuses['multitoken'] = array(
+    'name' => 'multitoken',
+    'title' => t('Multi Token Payment'),
+    'state' => 'multitoken',
+  );
+  $order_statuses['paymentfailed'] = array(
+    'name' => 'paymentfailed',
+    'title' => t('Payment Failed'),
+    'state' => 'paymentfailed',
+  );
+  return $order_statuses;
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function commerce_bleumipay_uninstall() 
+{
+  watchdog('commerce_bleumipay', 'Bleumi Pay Uninstall..', array(), WATCHDOG_INFO);
+      
+  db_drop_table('commerce_bleumipay_cron');
+  db_drop_table('commerce_bleumipay_order');
+}
+

@@ -1,0 +1,13 @@
+name = Bleumi Pay
+description = Accept digital currency payments (like Tether USD, USD Coin, Stasis EURO, CryptoFranc).
+package = Commerce (Bleumi Pay)
+core = 7.x
+dependencies[] = commerce
+dependencies[] = commerce_payment
+dependencies[] = commerce_order
+
+; Information added by Drupal.org packaging script on 2018-03-14
+version = "7.x-1.0"
+core = "7.x"
+project = "commerce_bleumipay"
+datestamp = "1521015487"
